@@ -83,6 +83,15 @@ enum Constants {
         static let settingsWidth: CGFloat = 560
         /// Height of the settings window.
         static let settingsHeight: CGFloat = 520
+        /// Extra trailing space reserved in scrollable lists so a vertical
+        /// scroller (legacy or floating/overlay style) never overlaps
+        /// trailing content such as version labels.
+        static let scrollerGutter: CGFloat = 16
+        /// Maximum height of scrollable lists/logs in the popover; shorter
+        /// content shrinks to fit. Leaves room for the buttons below.
+        static let scrollMaxHeight: CGFloat = popoverHeight - 60
+        /// Leading indent of the expanded check log.
+        static let logIndent: CGFloat = 16
     }
 
     // MARK: - PackageType

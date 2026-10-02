@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import SwiftUI
 
 /// Represents the current state of the update check/update process.
 enum UpdateState: Equatable, Sendable {
@@ -97,11 +96,6 @@ enum UpdateState: Equatable, Sendable {
             return .systemGray
         }
     }
-
-    /// The SwiftUI color matching `badgeColor`, for use in the popover UI.
-    var statusColor: Color {
-        Color(badgeColor)
-    }
 }
 
 /// A homebrew package that has an available update.
@@ -139,17 +133,17 @@ enum PackageUpdateStatus: Equatable, Sendable {
         }
     }
 
-    /// The SwiftUI color for this status.
-    var color: Color {
+    /// The color for this status, used in the popover UI.
+    var color: NSColor {
         switch self {
         case .queued:
-            return .secondary
+            return .secondaryLabelColor
         case .updating:
-            return .yellow
+            return .systemYellow
         case .success:
-            return .green
+            return .systemGreen
         case .failed:
-            return .red
+            return .systemRed
         }
     }
 

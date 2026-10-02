@@ -2,7 +2,6 @@ import AppKit
 import QuartzCore
 import Combine
 import Network
-import SwiftUI
 
 /// Application delegate that manages the menu bar status item and popover.
 @MainActor
@@ -17,7 +16,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
-    private var settingsWindow: NSWindow?
+    /// Monitors clicks outside the app so the popover can be dismissed
+    /// manually. Installed only while the popover is shown.
+    ///
+    /// `NSPopover.behavior = .transient` auto-dismisses on *any* outside
+    /// click — including the status item button's own click, since the
+    /// button is outside the popover's view. That auto-dismiss can race
+    /// with the button's `togglePopover` action: the popover closes first,
+    /// then the action fires, sees `isShown == false`, and reopens it —
+    /// looking like the popover "closes and immediately reopens" instead of
+    /// just closing. A global monitor never fires for events delivered to
+    /// this app's own windows/controls (per Apple's documentation), so
+    /// using it instead for dismissal — with `.applicationDefined` behavior
+    /// — avoids that race entirely.
+    private var popoverOutsideClickMonitor: Any?
+    private var settingsWindowController: SettingsWindowController!
     private var checkTimer: Timer?
     private var badgeLayer: CALayer?
     /// Cached sublayers for the static badge (white bg + symbol). Recreated only when
@@ -48,6 +61,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupDockIcons()
         setupStatusItem()
         setupPopover()
+        settingsWindowController = SettingsWindowController(onSave: { [weak self] _ in
+            self?.scheduleCheckTimer()
+        })
         scheduleCheckTimer()
         checkForUpdatesWhenNetworkReady()
     }
@@ -522,20 +538,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupPopover() {
         popover = NSPopover()
-        popover.behavior = .transient
+        // Dismissal is handled manually via `popoverOutsideClickMonitor`
+        // (see its doc comment for why `.transient` causes a close/reopen
+        // race with the status item button's own click).
+        popover.behavior = .applicationDefined
+        // Keep the show/close transition animated (matches standard menu
+        // bar app behavior). Content-size changes while the popover is
+        // already open are handled separately with animation explicitly
+        // disabled just for that — see `MenuBarViewController.
+        // updatePreferredContentSize()` for why.
+        popover.animates = true
 
-        let view = MenuBarView(
-            brewManager: brewManager,
-            onSettings: { [weak self] in
-                self?.popover.performClose(nil)
-                self?.showSettings()
-            },
-            onQuit: {
-                NSApplication.shared.terminate(nil)
-            }
-        )
-        let controller = NSHostingController(rootView: view)
-        controller.sizingOptions = [.preferredContentSize]
+        let controller = MenuBarViewController(brewManager: brewManager)
+        controller.popover = popover
+        controller.onSettings = { [weak self] in
+            self?.closePopover()
+            self?.showSettings()
+        }
+        controller.onQuit = {
+            NSApplication.shared.terminate(nil)
+        }
         popover.contentViewController = controller
     }
 
@@ -553,51 +575,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
+    /// Tracks whether the popover is currently visible.
+    ///
+    /// `togglePopover` used to branch on `NSPopover.isShown` directly, but
+    /// that flag is updated by AppKit itself and isn't guaranteed to be
+    /// perfectly synchronous with `show`/`performClose` in every scenario.
+    /// Tracking visibility ourselves, set synchronously at the start of
+    /// `showPopover`/`closePopover`, removes any dependency on exactly when
+    /// AppKit updates its own internal flag.
+    private var isPopoverVisible = false
+
     @objc private func togglePopover() {
-        guard let button = statusItem.button else { return }
-        if popover.isShown {
-            popover.performClose(nil)
+        if isPopoverVisible {
+            closePopover()
         } else {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
+            showPopover()
+        }
+    }
+
+    private func showPopover() {
+        guard !isPopoverVisible, let button = statusItem.button else { return }
+        isPopoverVisible = true
+
+        // Note: deliberately not calling `NSApp.activate(ignoringOtherApps:)`
+        // here. It used to be needed to make the very first click actually
+        // show the popover instead of just focusing the app, but it has a
+        // visible side effect: it steals key/active status from whatever
+        // app was frontmost, which makes that other app's window shadow
+        // visibly change, as if it lost focus — something menu bar apps
+        // like openfortivpn-gui-macos don't do. Now that the underlying
+        // popover/crash issues are fixed, `popover.show` alone is
+        // sufficient without that side effect.
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        // Give the popover keyboard focus (without activating the app).
+        popover.contentViewController?.view.window?.makeKey()
+
+        popoverOutsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            guard let self else { return }
+            // Defensively ignore clicks that land on the status item's own
+            // button: its target-action (`togglePopover`) already handles
+            // that case exclusively. If a click there were ever also
+            // treated as "outside" by this monitor, the popover would close
+            // here on mouse-down, and the button's own action would then
+            // reopen it on the matching mouse-up — a close-then-reopen
+            // race that looks like the popover "doesn't want to close".
+            if let buttonWindow = self.statusItem.button?.window, buttonWindow.frame.contains(NSEvent.mouseLocation) {
+                return
+            }
+            self.closePopover()
+        }
+    }
+
+    private func closePopover() {
+        guard isPopoverVisible else { return }
+        isPopoverVisible = false
+        popover.performClose(nil)
+        if let monitor = popoverOutsideClickMonitor {
+            NSEvent.removeMonitor(monitor)
+            popoverOutsideClickMonitor = nil
         }
     }
 
     private func showSettings() {
-        if let settingsWindow, settingsWindow.isVisible {
-            settingsWindow.makeKeyAndOrderFront(nil)
-
-            // Bring app to front for the settings window
-            NSApp.activate(ignoringOtherApps: true)
-            
-            return
-        }
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: Constants.UI.settingsWidth, height: Constants.UI.settingsHeight),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-
-        let settingsView = SettingsView(
-            onSave: { [weak self] _ in
-                self?.scheduleCheckTimer()
-            },
-            onClose: { [weak window] in
-                window?.close()
-            }
-        )
-
-        window.title = L10n.Settings.title
-        window.contentView = NSHostingView(rootView: settingsView)
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        window.isReleasedWhenClosed = false
-
-        settingsWindow = window
-
-        // Bring app to front for the settings window
-        NSApp.activate(ignoringOtherApps: true)
+        settingsWindowController.show()
     }
 }

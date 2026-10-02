@@ -110,19 +110,31 @@ make clean
 
 ```
 Sources/
-  main.swift           - Application entry point
-  AppDelegate.swift    - Menu bar status item and popover management
-  BrewManager.swift    - Homebrew interaction (check/update packages)
-  Constants.swift      - Centralized constants
-  KeychainHelper.swift - Securely store sudo password in macOS Keychain
-  Localization.swift   - EN/DE translations
-  MenuBarView.swift    - Main popover UI (package list, controls)
-  Settings.swift       - Persistent settings (interval, autostart)
-  SettingsView.swift   - Settings dialog UI
-  UpdateState.swift    - State enum and BrewPackage model
+  main.swift                    - Application entry point
+  AppDelegate.swift              - Menu bar status item and popover management
+  AppKitExtensions.swift         - Closure-based AppKit controls and layout helpers
+  BrewManager.swift              - Homebrew interaction (check/update packages)
+  Constants.swift                - Centralized constants
+  IndeterminateRingView.swift    - Spinning progress ring indicator view
+  KeychainHelper.swift           - Securely store sudo password in macOS Keychain
+  Localization.swift             - EN/DE translations
+  MenuBarViewController.swift    - Main popover UI (package list, controls)
+  Settings.swift                 - Persistent settings (interval, autostart)
+  SettingsViewController.swift   - Settings window UI
+  UpdateState.swift              - State enum and BrewPackage model
 Tests/
   Tests.swift          - Unit tests
 ```
+
+The UI is built with **AppKit only** (no SwiftUI). This is a deliberate choice:
+SwiftUI's property-wrapper macros (`@State`, `@Binding`, etc.) are expanded by
+a compiler plugin (`libSwiftUIMacros.dylib`) that Apple ships only inside the
+full `Xcode.app` bundle, not in the standalone Command Line Tools. Building
+this project with `swiftc`/`make` alone — without any Xcode installation —
+would fail with a "plugin for module 'SwiftUIMacros' not found" error if
+SwiftUI were used. Sticking to AppKit keeps the project fully buildable with
+just the Swift toolchain from the Command Line Tools.
+
 
 ## Configuration
 
